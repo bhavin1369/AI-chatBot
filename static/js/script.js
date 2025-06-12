@@ -12,6 +12,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const aiMessageTemplate = document.getElementById('aiMessageTemplate');
     const solutionTemplate = document.getElementById('solutionTemplate');
     
+    // Conversation context tracking
+    let conversationContext = [];
+    
     // Markdown converter
     const converter = new showdown.Converter({
         tables: true,
@@ -100,6 +103,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const message = messageInput.value.trim();
         if (!message) return;
         
+        // Disable send button to prevent multiple sends
+        sendButton.disabled = true;
+        
         // Clear input
         messageInput.value = '';
         messageInput.style.height = 'auto';
@@ -119,6 +125,13 @@ document.addEventListener('DOMContentLoaded', function() {
         userTimestamp.textContent = getCurrentTime();
         chatMessages.appendChild(userMessageClone);
         
+        // Add to conversation context
+        conversationContext.push({
+            role: 'user',
+            message: message,
+            timestamp: getCurrentTime()
+        });
+        
         // Add AI message with typing indicator
         const aiMessageClone = document.importNode(aiMessageTemplate.content, true);
         const aiMessage = aiMessageClone.querySelector('.message');
@@ -130,16 +143,22 @@ document.addEventListener('DOMContentLoaded', function() {
         // Scroll to bottom
         scrollToBottom();
         
-        // Send request to server
+        // Send request to server with context
         fetch('/ask', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ message: message })
+            body: JSON.stringify({ 
+                message: message,
+                context: conversationContext.slice(-10) // Send last 10 messages for context
+            })
         })
         .then(response => response.json())
         .then(data => {
+            // Re-enable send button
+            sendButton.disabled = false;
+            
             // Remove typing indicator
             const typingIndicator = aiMessage.querySelector('.typing-indicator');
             if (typingIndicator) {
@@ -152,19 +171,32 @@ document.addEventListener('DOMContentLoaded', function() {
                 aiBubble.classList.add('error');
                 aiBubble.textContent = data.error;
             } else {
-                // Add AI response
-                aiBubble.textContent = "I've prepared a detailed solution for you. Please check below.";
+                // Add AI response to context
+                conversationContext.push({
+                    role: 'assistant',
+                    message: data.response,
+                    timestamp: data.timestamp
+                });
                 
-                // Add solution container
-                const solutionClone = document.importNode(solutionTemplate.content, true);
-                const solutionContent = solutionClone.querySelector('.solution-content');
-                
-                // Convert markdown to HTML
-                const htmlContent = converter.makeHtml(data.response);
-                solutionContent.innerHTML = htmlContent;
-                
-                // Add solution after AI message
-                aiMessage.insertAdjacentElement('afterend', solutionClone.querySelector('.solution-container'));
+                // Check if response is short (likely a brief answer)
+                if (data.response.length < 200) {
+                    // For short responses, show directly in bubble
+                    aiBubble.innerHTML = formatText(data.response);
+                } else {
+                    // For longer responses, show in solution container
+                    aiBubble.textContent = "I've prepared a detailed solution for you. Please check below.";
+                    
+                    // Add solution container
+                    const solutionClone = document.importNode(solutionTemplate.content, true);
+                    const solutionContent = solutionClone.querySelector('.solution-content');
+                    
+                    // Convert markdown to HTML
+                    const htmlContent = converter.makeHtml(data.response);
+                    solutionContent.innerHTML = htmlContent;
+                    
+                    // Add solution after AI message
+                    aiMessage.insertAdjacentElement('afterend', solutionClone.querySelector('.solution-container'));
+                }
                 
                 // Highlight code blocks
                 document.querySelectorAll('pre code').forEach((block) => {
@@ -177,6 +209,8 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .catch(error => {
             console.error('Error:', error);
+            sendButton.disabled = false;
+            
             const typingIndicator = aiMessage.querySelector('.typing-indicator');
             if (typingIndicator) {
                 typingIndicator.remove();
@@ -190,6 +224,16 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
+    // Format text for inline display
+    function formatText(text) {
+        // Simple formatting for inline text
+        return text
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/`(.*?)`/g, '<code>$1</code>')
+            .replace(/\n/g, '<br>');
+    }
+    
     // Clear chat history
     function clearHistory() {
         fetch('/clear_history', {
@@ -199,6 +243,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(data => {
             if (data.status === 'success') {
                 chatMessages.innerHTML = '';
+                conversationContext = []; // Clear local context
                 
                 // Add welcome message back
                 const welcomeHTML = `
